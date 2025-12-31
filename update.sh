@@ -6,10 +6,42 @@ blue='\033[0;34m'
 yellow='\033[0;33m'
 plain='\033[0m'
 
-cur_dir=$(pwd)
+# Don't edit this config
+b_source="${BASH_SOURCE[0]}"
+while [ -h "$b_source" ]; do
+    b_dir="$(cd -P "$(dirname "$b_source")" >/dev/null 2>&1 && pwd || pwd -P)"
+    b_source="$(readlink "$b_source")"
+    [[ $b_source != /* ]] && b_source="$b_dir/$b_source"
+done
+cur_dir="$(cd -P "$(dirname "$b_source")" >/dev/null 2>&1 && pwd || pwd -P)"
+script_name=$(basename "$0")
+
+# Check command exist function
+_command_exists() {
+    type "$1" &>/dev/null
+}
+
+# Fail, log and exit script function
+_fail() {
+    local msg=${1}
+    echo -e "${red}${msg}${plain}"
+    exit 2
+}
 
 # check root
-[[ $EUID -ne 0 ]] && echo -e "${red}Fatal error: ${plain} Please run this script with root privilege \n " && exit 1
+[[ $EUID -ne 0 ]] && _fail "FATAL ERROR: Please run this script with root privilege."
+
+if _command_exists wget; then
+    wget_bin=$(which wget)
+else
+    _fail "ERROR: Command 'wget' not found."
+fi
+
+if _command_exists curl; then
+    curl_bin=$(which curl)
+else
+    _fail "ERROR: Command 'curl' not found."
+fi
 
 # Check OS and set release variable
 if [[ -f /etc/os-release ]]; then
@@ -19,8 +51,7 @@ if [[ -f /etc/os-release ]]; then
     source /usr/lib/os-release
     release=$ID
 else
-    echo "Failed to check the system OS, please contact the author!" >&2
-    exit 1
+    _fail "Failed to check the system OS, please contact the author!"
 fi
 echo "The OS release is: $release"
 
@@ -33,7 +64,7 @@ arch() {
         armv6* | armv6) echo 'armv6' ;;
         armv5* | armv5) echo 'armv5' ;;
         s390x) echo 's390x' ;;
-        *) echo -e "${green}Unsupported CPU architecture! ${plain}" && rm -f install.sh && exit 1 ;;
+        *) echo -e "${red}Unsupported CPU architecture!${plain}" && rm -f "${cur_dir}/${script_name}" >/dev/null 2>&1 && exit 2;;
     esac
 }
 
@@ -53,40 +84,41 @@ is_domain() {
     [[ "$1" =~ ^([A-Za-z0-9](-*[A-Za-z0-9])*\.)+[A-Za-z]{2,}$ ]] && return 0 || return 1
 }
 
-install_base() {
-    case "${release}" in
-        ubuntu | debian | armbian)
-            apt-get update && apt-get install -y -q wget curl tar tzdata openssl socat
-        ;;
-        fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
-            dnf -y update && dnf install -y -q wget curl tar tzdata openssl socat
-        ;;
-        centos)
-            if [[ "${VERSION_ID}" =~ ^7 ]]; then
-                yum -y update && yum install -y wget curl tar tzdata openssl socat
-            else
-                dnf -y update && dnf install -y -q wget curl tar tzdata openssl socat
-            fi
-        ;;
-        arch | manjaro | parch)
-            pacman -Syu && pacman -Syu --noconfirm wget curl tar tzdata openssl socat
-        ;;
-        opensuse-tumbleweed | opensuse-leap)
-            zypper refresh && zypper -q install -y wget curl tar timezone openssl socat
-        ;;
-        alpine)
-            apk update && apk add wget curl tar tzdata openssl socat
-        ;;
-        *)
-            apt-get update && apt-get install -y -q wget curl tar tzdata openssl socat
-        ;;
-    esac
-}
-
 gen_random_string() {
     local length="$1"
     local random_string=$(LC_ALL=C tr -dc 'a-zA-Z0-9' </dev/urandom | fold -w "$length" | head -n 1)
     echo "$random_string"
+}
+
+install_base() {
+    echo -e "${green}Updating and install dependency packages...${plain}"
+    case "${release}" in
+        ubuntu | debian | armbian)
+            apt-get update >/dev/null 2>&1 && apt-get install -y -q wget curl tar tzdata openssl socat >/dev/null 2>&1
+        ;;
+        fedora | amzn | virtuozzo | rhel | almalinux | rocky | ol)
+            dnf -y update >/dev/null 2>&1 && dnf install -y -q wget curl tar tzdata openssl socat >/dev/null 2>&1
+        ;;
+        centos)
+            if [[ "${VERSION_ID}" =~ ^7 ]]; then
+                yum -y update >/dev/null 2>&1 && yum install -y -q wget curl tar tzdata openssl socat >/dev/null 2>&1
+            else
+                dnf -y update >/dev/null 2>&1 && dnf install -y -q wget curl tar tzdata openssl socat >/dev/null 2>&1
+            fi
+        ;;
+        arch | manjaro | parch)
+            pacman -Syu >/dev/null 2>&1 && pacman -Syu --noconfirm wget curl tar tzdata openssl socat >/dev/null 2>&1
+        ;;
+        opensuse-tumbleweed | opensuse-leap)
+            zypper refresh >/dev/null 2>&1 && zypper -q install -y wget curl tar timezone openssl socat >/dev/null 2>&1
+        ;;
+        alpine)
+            apk update >/dev/null 2>&1 && apk add wget curl tar tzdata openssl socat >/dev/null 2>&1
+        ;;
+        *)
+            apt-get update >/dev/null 2>&1 && apt install -y -q wget curl tar tzdata openssl socat >/dev/null 2>&1
+        ;;
+    esac
 }
 
 install_acme() {
@@ -183,7 +215,7 @@ setup_self_signed_certificate() {
         sanExt="DNS:${name}"
     fi
 
-    # Use -addext if supported; fallback to config file if needed
+    # Try -addext; fallback to config if not supported
     openssl req -x509 -nodes -newkey rsa:2048 -days 365 \
         -keyout "${certDir}/privkey.pem" \
         -out "${certDir}/fullchain.pem" \
@@ -191,7 +223,6 @@ setup_self_signed_certificate() {
         -addext "subjectAltName=${sanExt}" >/dev/null 2>&1
 
     if [[ $? -ne 0 ]]; then
-        # Fallback via temporary config file (for older OpenSSL versions)
         local tmpCfg="${certDir}/openssl.cnf"
         cat > "$tmpCfg" <<EOF
 [req]
@@ -219,7 +250,6 @@ EOF
     echo -e "${yellow}Self-signed certificate configured. Browsers will show a warning.${plain}"
     return 0
 }
-
 # Comprehensive manual SSL certificate issuance via acme.sh
 ssl_cert_issue() {
     local existing_webBasePath=$(/usr/local/x-ui/x-ui setting -show true | grep 'webBasePath:' | awk -F': ' '{print $2}' | tr -d '[:space:]' | sed 's#^/##')
@@ -383,9 +413,8 @@ ssl_cert_issue() {
     
     return 0
 }
-
-# Reusable interactive SSL setup (domain or self-signed)
-# Sets global `SSL_HOST` to the chosen domain/IP for Access URL usage
+# Unified interactive SSL setup (domain or self-signed)
+# Sets global `SSL_HOST` to the chosen domain/IP
 prompt_and_setup_ssl() {
     local panel_port="$1"
     local web_base_path="$2"   # expected without leading slash
@@ -395,7 +424,7 @@ prompt_and_setup_ssl() {
 
     echo -e "${yellow}Choose SSL certificate setup method:${plain}"
     echo -e "${green}1.${plain} Let's Encrypt (domain required, recommended)"
-    echo -e "${green}2.${plain} Self-signed certificate (not publicly trusted)"
+    echo -e "${green}2.${plain} Self-signed certificate (for testing/local use)"
     read -rp "Choose an option (default 2): " ssl_choice
     ssl_choice="${ssl_choice// /}"  # Trim whitespace
     
@@ -443,6 +472,10 @@ prompt_and_setup_ssl() {
             systemctl start x-ui >/dev/null 2>&1
         fi
         ;;
+    0)
+        echo -e "${yellow}Skipping SSL setup${plain}"
+        SSL_HOST="${server_ip}"
+        ;;
     *)
         echo -e "${red}Invalid option. Skipping SSL setup.${plain}"
         SSL_HOST="${server_ip}"
@@ -450,12 +483,17 @@ prompt_and_setup_ssl() {
     esac
 }
 
-config_after_install() {
-    local existing_hasDefaultCredential=$(/usr/local/x-ui/x-ui setting -show true | grep -Eo 'hasDefaultCredential: .+' | awk '{print $2}')
-    local existing_webBasePath=$(/usr/local/x-ui/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}' | sed 's#^/##')
-    local existing_port=$(/usr/local/x-ui/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
+config_after_update() {
+    echo -e "${yellow}x-ui settings:${plain}"
+    /usr/local/x-ui/x-ui setting -show true
+    /usr/local/x-ui/x-ui migrate
+    
     # Properly detect empty cert by checking if cert: line exists and has content after it
-    local existing_cert=$(/usr/local/x-ui/x-ui setting -getCert true | grep 'cert:' | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    local existing_cert=$(/usr/local/x-ui/x-ui setting -getCert true 2>/dev/null | grep 'cert:' | awk -F': ' '{print $2}' | tr -d '[:space:]')
+    local existing_port=$(/usr/local/x-ui/x-ui setting -show true | grep -Eo 'port: .+' | awk '{print $2}')
+    local existing_webBasePath=$(/usr/local/x-ui/x-ui setting -show true | grep -Eo 'webBasePath: .+' | awk '{print $2}' | sed 's#^/##')
+    
+    # Get server IP
     local URL_lists=(
         "https://api4.ipify.org"
         "https://ipv4.icanhazip.com"
@@ -466,210 +504,189 @@ config_after_install() {
     )
     local server_ip=""
     for ip_address in "${URL_lists[@]}"; do
-        server_ip=$(curl -s --max-time 3 "${ip_address}" 2>/dev/null | tr -d '[:space:]')
+        server_ip=$(${curl_bin} -s --max-time 3 "${ip_address}" 2>/dev/null | tr -d '[:space:]')
         if [[ -n "${server_ip}" ]]; then
             break
         fi
     done
     
+    # Handle missing/short webBasePath
     if [[ ${#existing_webBasePath} -lt 4 ]]; then
-        if [[ "$existing_hasDefaultCredential" == "true" ]]; then
-            local config_webBasePath=$(gen_random_string 18)
-            local config_username=$(gen_random_string 10)
-            local config_password=$(gen_random_string 10)
-            
-            read -rp "Would you like to customize the Panel Port settings? (If not, a random port will be applied) [y/n]: " config_confirm
-            if [[ "${config_confirm}" == "y" || "${config_confirm}" == "Y" ]]; then
-                read -rp "Please set up the panel port: " config_port
-                echo -e "${yellow}Your Panel Port is: ${config_port}${plain}"
-            else
-                local config_port=$(shuf -i 1024-62000 -n 1)
-                echo -e "${yellow}Generated random port: ${config_port}${plain}"
-            fi
-            
-            /usr/local/x-ui/x-ui setting -username "${config_username}" -password "${config_password}" -port "${config_port}" -webBasePath "${config_webBasePath}"
-            
-            echo ""
-            echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${green}     SSL Certificate Setup (MANDATORY)     ${plain}"
-            echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${yellow}For security, SSL certificate is required for all panels.${plain}"
-            echo -e "${yellow}Let's Encrypt requires a domain name (IP certificates are not issued).${plain}"
-            echo ""
-
-            prompt_and_setup_ssl "${config_port}" "${config_webBasePath}" "${server_ip}"
-            
-            # Display final credentials and access information
-            echo ""
-            echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${green}     Panel Installation Complete!         ${plain}"
-            echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${green}Username:    ${config_username}${plain}"
-            echo -e "${green}Password:    ${config_password}${plain}"
-            echo -e "${green}Port:        ${config_port}${plain}"
-            echo -e "${green}WebBasePath: ${config_webBasePath}${plain}"
-            echo -e "${green}Access URL:  https://${SSL_HOST}:${config_port}/${config_webBasePath}${plain}"
-            echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${yellow}⚠ IMPORTANT: Save these credentials securely!${plain}"
-            echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
-        else
-            local config_webBasePath=$(gen_random_string 18)
-            echo -e "${yellow}WebBasePath is missing or too short. Generating a new one...${plain}"
-            /usr/local/x-ui/x-ui setting -webBasePath "${config_webBasePath}"
-            echo -e "${green}New WebBasePath: ${config_webBasePath}${plain}"
-
-            # If the panel is already installed but no certificate is configured, prompt for SSL now
-            if [[ -z "${existing_cert}" ]]; then
-                echo ""
-                echo -e "${green}═══════════════════════════════════════════${plain}"
-                echo -e "${green}     SSL Certificate Setup (RECOMMENDED)   ${plain}"
-                echo -e "${green}═══════════════════════════════════════════${plain}"
-                echo -e "${yellow}Let's Encrypt requires a domain name (IP certificates are not issued).${plain}"
-                echo ""
-                prompt_and_setup_ssl "${existing_port}" "${config_webBasePath}" "${server_ip}"
-                echo -e "${green}Access URL:  https://${SSL_HOST}:${existing_port}/${config_webBasePath}${plain}"
-            else
-                # If a cert already exists, just show the access URL
-                echo -e "${green}Access URL: https://${server_ip}:${existing_port}/${config_webBasePath}${plain}"
-            fi
-        fi
-    else
-        if [[ "$existing_hasDefaultCredential" == "true" ]]; then
-            local config_username=$(gen_random_string 10)
-            local config_password=$(gen_random_string 10)
-            
-            echo -e "${yellow}Default credentials detected. Security update required...${plain}"
-            /usr/local/x-ui/x-ui setting -username "${config_username}" -password "${config_password}"
-            echo -e "Generated new random login credentials:"
-            echo -e "###############################################"
-            echo -e "${green}Username: ${config_username}${plain}"
-            echo -e "${green}Password: ${config_password}${plain}"
-            echo -e "###############################################"
-        else
-            echo -e "${green}Username, Password, and WebBasePath are properly set.${plain}"
-        fi
-
-        # Existing install: if no cert configured, prompt user to set domain or self-signed
-        # Properly detect empty cert by checking if cert: line exists and has content after it
-        existing_cert=$(/usr/local/x-ui/x-ui setting -getCert true | grep 'cert:' | awk -F': ' '{print $2}' | tr -d '[:space:]')
-        if [[ -z "$existing_cert" ]]; then
-            echo ""
-            echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${green}     SSL Certificate Setup (RECOMMENDED)   ${plain}"
-            echo -e "${green}═══════════════════════════════════════════${plain}"
-            echo -e "${yellow}Let's Encrypt requires a domain name (IP certificates are not issued).${plain}"
-            echo ""
-            prompt_and_setup_ssl "${existing_port}" "${existing_webBasePath}" "${server_ip}"
-            echo -e "${green}Access URL:  https://${SSL_HOST}:${existing_port}/${existing_webBasePath}${plain}"
-        else
-            echo -e "${green}SSL certificate already configured. No action needed.${plain}"
-        fi
+        echo -e "${yellow}WebBasePath is missing or too short. Generating a new one...${plain}"
+        local config_webBasePath=$(gen_random_string 18)
+        /usr/local/x-ui/x-ui setting -webBasePath "${config_webBasePath}"
+        existing_webBasePath="${config_webBasePath}"
+        echo -e "${green}New WebBasePath: ${config_webBasePath}${plain}"
     fi
     
-    /usr/local/x-ui/x-ui migrate
-
-    local existing_apiKey=$(/usr/local/x-ui/x-ui setting -show true | grep -oP 'apikey: \K.*')
-    if [[ -z "$existing_apiKey" ]]; then
-        local config_apiKey=$(gen_random_string 32)
-        /usr/local/x-ui/x-ui setting -apiKey "${config_apiKey}"
-        echo -e "${green}Generated random API Key: ${config_apiKey}${plain}"
+    # Check and prompt for SSL if missing
+    if [[ -z "$existing_cert" ]]; then
+        echo ""
+        echo -e "${red}═══════════════════════════════════════════${plain}"
+        echo -e "${red}      ⚠ NO SSL CERTIFICATE DETECTED ⚠     ${plain}"
+        echo -e "${red}═══════════════════════════════════════════${plain}"
+        echo -e "${yellow}For security, SSL certificate is MANDATORY for all panels.${plain}"
+        echo -e "${yellow}Let's Encrypt requires a domain name; IP certs are not issued. Use self-signed for IP.${plain}"
+        echo ""
+        
+        if [[ -z "${server_ip}" ]]; then
+            echo -e "${red}Failed to detect server IP${plain}"
+            echo -e "${yellow}Please configure SSL manually using: x-ui${plain}"
+            return
+        fi
+        
+        # Prompt and setup SSL (domain or self-signed)
+        prompt_and_setup_ssl "${existing_port}" "${existing_webBasePath}" "${server_ip}"
+        
+        echo ""
+        echo -e "${green}═══════════════════════════════════════════${plain}"
+        echo -e "${green}     Panel Access Information              ${plain}"
+        echo -e "${green}═══════════════════════════════════════════${plain}"
+        echo -e "${green}Access URL: https://${SSL_HOST}:${existing_port}/${existing_webBasePath}${plain}"
+        echo -e "${green}═══════════════════════════════════════════${plain}"
+        echo -e "${yellow}⚠ SSL Certificate: Enabled and configured${plain}"
+    else
+        echo -e "${green}SSL certificate is already configured${plain}"
+        # Show access URL with existing certificate
+        local cert_domain=$(basename "$(dirname "$existing_cert")")
+        echo ""
+        echo -e "${green}═══════════════════════════════════════════${plain}"
+        echo -e "${green}     Panel Access Information              ${plain}"
+        echo -e "${green}═══════════════════════════════════════════${plain}"
+        echo -e "${green}Access URL: https://${cert_domain}:${existing_port}/${existing_webBasePath}${plain}"
+        echo -e "${green}═══════════════════════════════════════════${plain}"
     fi
 }
 
-install_x-ui() {
+update_x-ui() {
     cd /usr/local/
     
-    # Download resources
-    if [ $# == 0 ]; then
-           # bash <(curl -Ls https://raw.githubusercontent.com/dimasmir03/3x-ui/feature/multi-server-support/install.sh)
-           # wget --inet4-only -O /etc/init.d/x-ui https://raw.githubusercontent.com/dimasmir03/3x-ui/feature/multi-server-support/x-ui.rc
-        tag_version=$(curl -Ls "https://api.github.com/repos/dimasmir03/3x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [ -f "/usr/local/x-ui/x-ui" ]; then
+        current_xui_version=$(/usr/local/x-ui/x-ui -v)
+        echo -e "${green}Current x-ui version: ${current_xui_version}${plain}"
+    else
+        _fail "ERROR: Current x-ui version: unknown"
+    fi
+    
+    echo -e "${green}Downloading new x-ui version...${plain}"
+    
+    tag_version=$(${curl_bin} -Ls "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+    if [[ ! -n "$tag_version" ]]; then
+        echo -e "${yellow}Trying to fetch version with IPv4...${plain}"
+        tag_version=$(${curl_bin} -4 -Ls "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         if [[ ! -n "$tag_version" ]]; then
-            echo -e "${yellow}Trying to fetch version with IPv4...${plain}"
-            tag_version=$(curl -4 -Ls "https://api.github.com/repos/dimasmir03/3x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-            if [[ ! -n "$tag_version" ]]; then
-                echo -e "${red}Failed to fetch x-ui version, it may be due to GitHub API restrictions, please try it later${plain}"
-                exit 1
+            _fail "ERROR: Failed to fetch x-ui version, it may be due to GitHub API restrictions, please try it later"
+        fi
+    fi
+    echo -e "Got x-ui latest version: ${tag_version}, beginning the installation..."
+    ${wget_bin} -N -O /usr/local/x-ui-linux-$(arch).tar.gz https://github.com/MHSanaei/3x-ui/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz 2>/dev/null
+    if [[ $? -ne 0 ]]; then
+        echo -e "${yellow}Trying to fetch version with IPv4...${plain}"
+        ${wget_bin} --inet4-only -N -O /usr/local/x-ui-linux-$(arch).tar.gz https://github.com/MHSanaei/3x-ui/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz 2>/dev/null
+        if [[ $? -ne 0 ]]; then
+            _fail "ERROR: Failed to download x-ui, please be sure that your server can access GitHub"
+        fi
+    fi
+    
+    if [[ -e /usr/local/x-ui/ ]]; then
+        echo -e "${green}Stopping x-ui...${plain}"
+        if [[ $release == "alpine" ]]; then
+            if [ -f "/etc/init.d/x-ui" ]; then
+                rc-service x-ui stop >/dev/null 2>&1
+                rc-update del x-ui >/dev/null 2>&1
+                echo -e "${green}Removing old service unit version...${plain}"
+                rm -f /etc/init.d/x-ui >/dev/null 2>&1
+            else
+                rm x-ui-linux-$(arch).tar.gz -f >/dev/null 2>&1
+                _fail "ERROR: x-ui service unit not installed."
+            fi
+        else
+            if [ -f "/etc/systemd/system/x-ui.service" ]; then
+                systemctl stop x-ui >/dev/null 2>&1
+                systemctl disable x-ui >/dev/null 2>&1
+                echo -e "${green}Removing old systemd unit version...${plain}"
+                rm /etc/systemd/system/x-ui.service -f >/dev/null 2>&1
+                systemctl daemon-reload >/dev/null 2>&1
+            else
+                rm x-ui-linux-$(arch).tar.gz -f >/dev/null 2>&1
+                _fail "ERROR: x-ui systemd unit not installed."
             fi
         fi
-        echo -e "Got x-ui latest version: ${tag_version}, beginning the installation..."
-        wget --inet4-only -N -O /usr/local/x-ui-linux-$(arch).tar.gz https://github.com/dimasmir03/3x-ui/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}Downloading x-ui failed, please be sure that your server can access GitHub ${plain}"
-            exit 1
-        fi
+        echo -e "${green}Removing old x-ui version...${plain}"
+        rm /usr/bin/x-ui -f >/dev/null 2>&1
+        rm /usr/local/x-ui/x-ui.service -f >/dev/null 2>&1
+        rm /usr/local/x-ui/x-ui -f >/dev/null 2>&1
+        rm /usr/local/x-ui/x-ui.sh -f >/dev/null 2>&1
+        echo -e "${green}Removing old xray version...${plain}"
+        rm /usr/local/x-ui/bin/xray-linux-amd64 -f >/dev/null 2>&1
+        echo -e "${green}Removing old README and LICENSE file...${plain}"
+        rm /usr/local/x-ui/bin/README.md -f >/dev/null 2>&1
+        rm /usr/local/x-ui/bin/LICENSE -f >/dev/null 2>&1
     else
-        tag_version=$1
-        tag_version_numeric=${tag_version#v}
-        min_version="2.3.5"
-        
-        if [[ "$(printf '%s\n' "$min_version" "$tag_version_numeric" | sort -V | head -n1)" != "$min_version" ]]; then
-            echo -e "${red}Please use a newer version (at least v2.3.5). Exiting installation.${plain}"
-            exit 1
-        fi
-        url="https://github.com/dimasmir03/3x-ui/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz"
-        
-        url="https://github.com/MHSanaei/3x-ui/releases/download/${tag_version}/x-ui-linux-$(arch).tar.gz"
-        echo -e "Beginning to install x-ui $1"
-        wget --inet4-only -N -O /usr/local/x-ui-linux-$(arch).tar.gz ${url}
-        if [[ $? -ne 0 ]]; then
-            echo -e "${red}Download x-ui $1 failed, please check if the version exists ${plain}"
-            exit 1
-        fi
-    fi
-    wget --inet4-only -O /usr/bin/x-ui-temp https://raw.githubusercontent.com/dimasmir03/3x-ui/feature/multi-server-support/x-ui.sh
-    if [[ $? -ne 0 ]]; then
-        echo -e "${red}Failed to download x-ui.sh${plain}"
-        exit 1
+        rm x-ui-linux-$(arch).tar.gz -f >/dev/null 2>&1
+        _fail "ERROR: x-ui not installed."
     fi
     
-    # Stop x-ui service and remove old resources
-    if [[ -e /usr/local/x-ui/ ]]; then
-        if [[ $release == "alpine" ]]; then
-            rc-service x-ui stop
-        else
-            systemctl stop x-ui
-        fi
-        rm /usr/local/x-ui/ -rf
-    fi
-    
-    # Extract resources and set permissions
-    tar zxvf x-ui-linux-$(arch).tar.gz
-    rm x-ui-linux-$(arch).tar.gz -f
-    
-    cd x-ui
-    chmod +x x-ui
-    chmod +x x-ui.sh
+    echo -e "${green}Installing new x-ui version...${plain}"
+    tar zxvf x-ui-linux-$(arch).tar.gz >/dev/null 2>&1
+    rm x-ui-linux-$(arch).tar.gz -f >/dev/null 2>&1
+    cd x-ui >/dev/null 2>&1
+    chmod +x x-ui >/dev/null 2>&1
     
     # Check the system's architecture and rename the file accordingly
     if [[ $(arch) == "armv5" || $(arch) == "armv6" || $(arch) == "armv7" ]]; then
-        mv bin/xray-linux-$(arch) bin/xray-linux-arm
-        chmod +x bin/xray-linux-arm
+        mv bin/xray-linux-$(arch) bin/xray-linux-arm >/dev/null 2>&1
+        chmod +x bin/xray-linux-arm >/dev/null 2>&1
     fi
-    chmod +x x-ui bin/xray-linux-$(arch)
     
-    # Update x-ui cli and se set permission
-    mv -f /usr/bin/x-ui-temp /usr/bin/x-ui
-    chmod +x /usr/bin/x-ui
-    config_after_install
+    chmod +x x-ui bin/xray-linux-$(arch) >/dev/null 2>&1
+    
+    echo -e "${green}Downloading and installing x-ui.sh script...${plain}"
+    ${wget_bin} -O /usr/bin/x-ui https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.sh >/dev/null 2>&1
+    if [[ $? -ne 0 ]]; then
+        echo -e "${yellow}Trying to fetch x-ui with IPv4...${plain}"
+        ${wget_bin} --inet4-only -O /usr/bin/x-ui https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.sh >/dev/null 2>&1
+        if [[ $? -ne 0 ]]; then
+            _fail "ERROR: Failed to download x-ui.sh script, please be sure that your server can access GitHub"
+        fi
+    fi
+    
+    chmod +x /usr/local/x-ui/x-ui.sh >/dev/null 2>&1
+    chmod +x /usr/bin/x-ui >/dev/null 2>&1
+    
+    echo -e "${green}Changing owner...${plain}"
+    chown -R root:root /usr/local/x-ui >/dev/null 2>&1
+    
+    if [ -f "/usr/local/x-ui/bin/config.json" ]; then
+        echo -e "${green}Changing on config file permissions...${plain}"
+        chmod 640 /usr/local/x-ui/bin/config.json >/dev/null 2>&1
+    fi
     
     if [[ $release == "alpine" ]]; then
-        wget --inet4-only -O /etc/init.d/x-ui https://raw.githubusercontent.com/dimasmir03/3x-ui/feature/multi-server-support/x-ui.rc
+        echo -e "${green}Downloading and installing startup unit x-ui.rc...${plain}"
+        ${wget_bin} -O /etc/init.d/x-ui https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.rc >/dev/null 2>&1
         if [[ $? -ne 0 ]]; then
-            echo -e "${red}Failed to download x-ui.rc${plain}"
-            exit 1
+            ${wget_bin} --inet4-only -O /etc/init.d/x-ui https://raw.githubusercontent.com/MHSanaei/3x-ui/main/x-ui.rc >/dev/null 2>&1
+            if [[ $? -ne 0 ]]; then
+                _fail "ERROR: Failed to download startup unit x-ui.rc, please be sure that your server can access GitHub"
+            fi
         fi
-        chmod +x /etc/init.d/x-ui
-        rc-update add x-ui
-        rc-service x-ui start
+        chmod +x /etc/init.d/x-ui >/dev/null 2>&1
+        chown root:root /etc/init.d/x-ui >/dev/null 2>&1
+        rc-update add x-ui >/dev/null 2>&1
+        rc-service x-ui start >/dev/null 2>&1
     else
-        cp -f x-ui.service /etc/systemd/system/
-        systemctl daemon-reload
-        systemctl enable x-ui
-        systemctl start x-ui
+        echo -e "${green}Installing systemd unit...${plain}"
+        cp -f x-ui.service /etc/systemd/system/ >/dev/null 2>&1
+        chown root:root /etc/systemd/system/x-ui.service >/dev/null 2>&1
+        systemctl daemon-reload >/dev/null 2>&1
+        systemctl enable x-ui >/dev/null 2>&1
+        systemctl start x-ui >/dev/null 2>&1
     fi
     
-    echo -e "${green}x-ui ${tag_version}${plain} installation finished, it is running now..."
+    config_after_update
+    
+    echo -e "${green}x-ui ${tag_version}${plain} updating finished, it is running now..."
     echo -e ""
     echo -e "┌───────────────────────────────────────────────────────┐
 │  ${blue}x-ui control menu usages (subcommands):${plain}              │
@@ -688,10 +705,9 @@ install_x-ui() {
 │  ${blue}x-ui legacy${plain}       - Legacy version                   │
 │  ${blue}x-ui install${plain}      - Install                          │
 │  ${blue}x-ui uninstall${plain}    - Uninstall                        │
-│  ${blue}x-ui v${plain}            - Show x-ui version                │
 └───────────────────────────────────────────────────────┘"
 }
-# bash <(curl -Ls https://raw.githubusercontent.com/dimasmir03/3x-ui/feature/multi-server-support/install.sh)
+
 echo -e "${green}Running...${plain}"
 install_base
-install_x-ui $1
+update_x-ui $1

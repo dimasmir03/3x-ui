@@ -666,6 +666,7 @@
 "active" = "💡 Активен: {{ .Enable }}\r\n"
 "enabled" = "🚨 Активен: {{ .Enable }}\r\n"
 "online" = "🌐 Статус соединения: {{ .Status }}\r\n"
+"lastOnline" = "🔙 Был(а) в сети: {{ .Time }}\r\n"
 "email" = "📧 Email: {{ .Email }}\r\n"
 "upload" = "🔼 Исходящий трафик: ↑{{ .Upload }}\r\n"
 "download" = "🔽 Входящий трафик: ↓{{ .Download }}\r\n"
