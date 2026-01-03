@@ -2329,6 +2329,7 @@ if [[ $# > 0 ]]; then
         ;;
     "v")
         check_install 0 && show_version 0
+        ;;
     "update-all-geofiles")
         check_install 0 && update_all_geofiles 0 && restart 0
         ;;
