@@ -1,14 +1,14 @@
 # ========================================================
 # Stage: Builder
 # ========================================================
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 ARG TARGETARCH
 
 RUN apk --no-cache --update add \
   build-base \
   gcc \
-  wget \
+  curl \
   unzip
 
 COPY . .

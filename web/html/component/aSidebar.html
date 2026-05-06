@@ -43,8 +43,7 @@
     Vue.component('a-sidebar', {
         data() {
             return {
-                tabs: [
-                    {
+                tabs: [{
                         key: '{{ .base_path }}panel/',
                         icon: 'dashboard',
                         title: '{{ i18n "menu.dashboard"}}'
@@ -84,8 +83,8 @@
         },
         methods: {
             openLink(key) {
-                return key.startsWith('http') ? 
-                    window.open(key) : 
+                return key.startsWith('http') ?
+                    window.open(key) :
                     location.href = key
             },
             closeDrawer() {
@@ -102,7 +101,7 @@
                 }
             }
         },
-        template: `{{template "component/sidebar/content"}}`,
+        template: `{{template "component/sidebar/content" .}}`,
     });
 </script>
 {{end}}
