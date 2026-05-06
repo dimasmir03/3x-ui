@@ -263,7 +263,7 @@ func updateTgbotSetting(tgBotToken string, tgBotChatid string, tgBotRuntime stri
 }
 
 // updateSetting updates various panel settings including port, credentials, base path, listen IP, and two-factor authentication.
-func updateSetting(port int, username string, password string, webBasePath string, listenIP string, resetTwoFactor bool, apiKey string) {
+func updateSetting(port int, username string, password string, webBasePath string, listenIP string, resetTwoFactor bool, apiKey string) error {
 
 	err := database.InitDB(config.GetDBPath())
 	if err != nil {
